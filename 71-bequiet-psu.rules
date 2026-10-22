@@ -1,0 +1,4 @@
+# be quiet! DARK POWER PRO 14 IO PSUs: non-root hidraw access (IO Center Web / bqpsu.py)
+# 0023 = 1300W, 0024 = 1600W
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="373f", ATTRS{idProduct}=="0023", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="373f", ATTRS{idProduct}=="0024", MODE="0660", GROUP="plugdev", TAG+="uaccess"
