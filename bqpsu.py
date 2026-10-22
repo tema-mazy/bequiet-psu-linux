@@ -11,6 +11,7 @@ fan mode, rail mode, sensor config, serial number or firmware is implemented.
 
 import argparse
 import csv
+import fcntl
 import glob
 import json
 import os
@@ -125,6 +126,11 @@ class PSU:
         self.path = path
         self.timeout = timeout
         self.fd = os.open(path, os.O_RDWR)
+        try:  # the PSU serves one session; keep a second bqpsu from interleaving with us
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(self.fd)
+            raise PSUError(f"{path} is in use by another bqpsu.py") from None
         self.req_id = random.randint(1, 255)
         self.session = 0
         self.session_timeout = 0
@@ -166,10 +172,13 @@ class PSU:
         deadline = time.monotonic() + self.timeout
         while True:
             buf = self._read_frame(deadline)
-            if len(buf) < 8 or buf[OFF_FEATURE] != feature or buf[OFF_CMD] != command:
-                continue  # notification or unrelated report
-            if buf[OFF_REQ] == 0 and buf[OFF_SEQ] == 0:
-                continue  # unsolicited notification
+            # hidraw delivers every input report to every open fd, so replies to other
+            # clients' requests show up here too: match our request ID, not just the command
+            if len(buf) < PACKET_SIZE or buf[OFF_REQ] != pkt[OFF_REQ] \
+                    or buf[OFF_FEATURE] != feature or buf[OFF_CMD] != command:
+                continue  # notification, other client's reply or unrelated report
+            if struct.unpack("<H", buf[-2:])[0] != crc16(buf[:-2]):
+                continue  # corrupted frame
             break
         status = buf[OFF_STATUS]
         seq = buf[OFF_SEQ]
@@ -263,6 +272,8 @@ class PSU:
                     si = self.command(F_SENSORS, S_SENSOR_INFO, bytes([idx]))
                 except PSUError:
                     enabled = False
+                if enabled and (si[1] not in VALUE_TYPES or not -9 <= struct.unpack("<b", si[2:3])[0] <= 9):
+                    raise PSUError(f"implausible metadata for sensor {idx}: {si[:3].hex()}")
             key, label = SENSORS[idx] if idx < len(SENSORS) else (f"sensor_{idx}", f"Sensor {idx}")
             self.sensors.append({
                 "index": idx, "key": key, "label": label, "enabled": enabled,
